@@ -202,6 +202,7 @@ const epley1RM = (w, r) => (w > 0 && r > 0 ? Math.round(w * (1 + r / 30)) : 0);
 const roundToStep = (x, step) => { const s = step || 5; return Math.round(x / s) * s; };
 const predictReps = (e1rm, w) => (!(e1rm > 0) || !(w > 0)) ? null : Math.min(40, Math.max(1, Math.round(30 * (e1rm / w - 1))));
 const cleanOf = (s) => Math.max(0, (s.reps || 0) - (s.assist || 0)); // reps done unassisted
+const bwLabel = (added) => added > 0 ? `BW+${added}` : added < 0 ? `BW−${Math.abs(added)} assisted` : "BW";
 
 function bestE1RMHistory(logsForEx) {
   if (!logsForEx) return 0;
@@ -223,7 +224,8 @@ function workingWeeksDesc(logsForEx, beforeWeek) {
 }
 function workingWeight(sets) {
   const counts = {};
-  sets.forEach((s) => { if (s.weight > 0) counts[s.weight] = (counts[s.weight] || 0) + 1; });
+  const hasNonPositive = sets.some((s) => s.weight <= 0);
+  sets.forEach((s) => { if (hasNonPositive || s.weight > 0) counts[s.weight] = (counts[s.weight] || 0) + 1; });
   const e = Object.entries(counts);
   if (!e.length) return 0;
   e.sort((a, b) => b[1] - a[1] || Number(b[0]) - Number(a[0]));
@@ -327,6 +329,7 @@ export default function App() {
   const [logs, setLogs] = useState({});
   const [week, setWeek] = useState(1);
   const [unit, setUnit] = useState("lb");
+  const [bodyweight, setBodyweight] = useState(null);
   const [tab, setTab] = useState("train");
   const [dayId, setDayId] = useState(null);
 
@@ -336,7 +339,7 @@ export default function App() {
       const l = await loadKey("wt_logs", {});
       const s = await loadKey("wt_settings", { week: 1, unit: "lb" });
       await saveKey("wt_program", p);
-      setProgram(p); setLogs(l); setWeek(s.week || 1); setUnit(s.unit || "lb");
+      setProgram(p); setLogs(l); setWeek(s.week || 1); setUnit(s.unit || "lb"); setBodyweight(s.bodyweight ?? null);
       const today = p.days.find((d) => d.weekday === todayLabel());
       setDayId((today || p.days[0])?.id || null);
       setLoading(false);
@@ -345,8 +348,9 @@ export default function App() {
 
   const persistLogs = (n) => { setLogs(n); saveKey("wt_logs", n); };
   const persistProgram = (n) => { setProgram(n); saveKey("wt_program", n); };
-  const persistSettings = (w, u) => saveKey("wt_settings", { week: w, unit: u });
-  const changeWeek = (d) => { const w = Math.max(1, week + d); setWeek(w); persistSettings(w, unit); };
+  const persistSettings = (w, u, bw) => saveKey("wt_settings", { week: w, unit: u, bodyweight: bw ?? null });
+  const changeWeek = (d) => { const w = Math.max(1, week + d); setWeek(w); persistSettings(w, unit, bodyweight); };
+  const persistBodyweight = (bw) => { setBodyweight(bw); persistSettings(week, unit, bw); };
 
   if (loading || !program)
     return <div className="min-h-screen bg-zinc-950 flex items-center justify-center text-zinc-500 font-mono" style={{ fontSize: 14 }}>Loading your log…</div>;
@@ -388,17 +392,17 @@ export default function App() {
       </header>
 
       <main className="max-w-3xl mx-auto px-4 py-5" style={{ paddingBottom: 96 }}>
-        {tab === "train" && <TrainView program={program} logs={logs} week={week} unit={unit} meso={meso} dayId={dayId} setDayId={setDayId} persistLogs={persistLogs} />}
-        {tab === "progress" && <ProgressView program={program} logs={logs} unit={unit} />}
+        {tab === "train" && <TrainView program={program} logs={logs} week={week} unit={unit} meso={meso} dayId={dayId} setDayId={setDayId} persistLogs={persistLogs} bodyweight={bodyweight} />}
+        {tab === "progress" && <ProgressView program={program} logs={logs} unit={unit} bodyweight={bodyweight} />}
         {tab === "volume" && <VolumeView program={program} logs={logs} week={week} meso={meso} />}
-        {tab === "routine" && <RoutineView program={program} logs={logs} unit={unit} setUnit={(u) => { setUnit(u); persistSettings(week, u); }} persistProgram={persistProgram} persistLogs={persistLogs} />}
+        {tab === "routine" && <RoutineView program={program} logs={logs} unit={unit} setUnit={(u) => { setUnit(u); persistSettings(week, u, bodyweight); }} persistProgram={persistProgram} persistLogs={persistLogs} bodyweight={bodyweight} persistBodyweight={persistBodyweight} />}
       </main>
     </div>
   );
 }
 
 /* ============================== TRAIN ============================== */
-function TrainView({ program, logs, week, unit, meso, dayId, setDayId, persistLogs }) {
+function TrainView({ program, logs, week, unit, meso, dayId, setDayId, persistLogs, bodyweight }) {
   const today = todayLabel();
   const day = program.days.find((d) => d.id === dayId) || program.days[0];
   if (!day) return <Empty label="No workout days yet. Add one in the Routine tab." />;
@@ -453,7 +457,7 @@ function TrainView({ program, logs, week, unit, meso, dayId, setDayId, persistLo
       </div>
 
       <div className="space-y-3">
-        {day.exercises.map((ex) => <ExerciseCard key={ex.id} exercise={ex} logs={logs} week={week} unit={unit} program={program} persistLogs={persistLogs} />)}
+        {day.exercises.map((ex) => <ExerciseCard key={ex.id} exercise={ex} logs={logs} week={week} unit={unit} program={program} persistLogs={persistLogs} bodyweight={bodyweight} />)}
         {day.exercises.length === 0 && <Empty label="No exercises on this day yet. Add some in Routine." />}
       </div>
     </div>
@@ -509,17 +513,28 @@ function RepInput({ value, goal, onChange }) {
   );
 }
 
-function ExerciseCard({ exercise, logs, week, unit, program, persistLogs }) {
+function ExerciseCard({ exercise, logs, week, unit, program, persistLogs, bodyweight }) {
   const meso = useMemo(() => mesoInfo(program, week), [program, week]);
+  const isBW = exercise.equipment === "Bodyweight";
+  const bwSet = bodyweight != null;
+  const totalOf = (added) => (isBW && bwSet) ? bodyweight + added : added;
   const logsForEx = logs[exercise.id];
   const sug = useMemo(() => suggest(exercise, logsForEx, week, program), [exercise, logsForEx, week, program]);
-  const refE1RM = useMemo(() => bestE1RMHistory(logsForEx), [logsForEx]);
+  const refE1RM = useMemo(() => {
+    if (!logsForEx) return 0;
+    const bwAdd = (isBW && bwSet) ? bodyweight : 0;
+    let best = 0;
+    for (const wk of Object.keys(logsForEx))
+      for (const s of (logsForEx[wk].sets || []))
+        best = Math.max(best, epley1RM(bwAdd + s.weight, cleanOf(s)));
+    return best;
+  }, [logsForEx, bodyweight, exercise.equipment]); // eslint-disable-line react-hooks/exhaustive-deps
   const existing = logsForEx?.[week];
 
   const build = () => {
     if (existing?.sets?.length)
-      return existing.sets.map((s) => ({ weight: String(s.weight || ""), repStr: s.assist ? `${(s.reps || 0) - s.assist}/${s.assist}` : (s.reps ? String(s.reps) : "") }));
-    return Array.from({ length: sug.setCount }, () => ({ weight: sug.weight ? String(sug.weight) : "", repStr: "" }));
+      return existing.sets.map((s) => ({ weight: isBW ? String(s.weight ?? 0) : String(s.weight || ""), repStr: s.assist ? `${(s.reps || 0) - s.assist}/${s.assist}` : (s.reps ? String(s.reps) : "") }));
+    return Array.from({ length: sug.setCount }, () => ({ weight: isBW ? String(sug.weight) : (sug.weight ? String(sug.weight) : ""), repStr: "" }));
   };
   const [rows, setRows] = useState(build);
   const [rir, setRir] = useState(existing?.rir != null ? String(existing.rir) : "");
@@ -556,9 +571,10 @@ function ExerciseCard({ exercise, logs, week, unit, program, persistLogs }) {
     persistLogs(next); setDirty(false);
   };
 
-  const bestNow = rows.reduce((m, r) => Math.max(m, epley1RM(Number(r.weight), parseRep(r.repStr).clean)), 0);
+  const bestNow = rows.reduce((m, r) => Math.max(m, epley1RM(totalOf(Number(r.weight)), parseRep(r.repStr).clean)), 0);
   const goalForRow = (rowWeight) => {
-    const w = Number(rowWeight) || sug.weight;
+    const addedW = rowWeight !== "" && rowWeight !== undefined ? Number(rowWeight) : sug.weight;
+    const w = totalOf(isNaN(addedW) ? sug.weight : addedW);
     const p = predictReps(refE1RM, w);
     const raw = p != null ? p : (sug.action === "weight" || sug.action === "deload" ? exercise.repLow : (sug.reps || exercise.repLow));
     return Math.min(exercise.repHigh, Math.max(exercise.repLow, raw));
@@ -579,7 +595,7 @@ function ExerciseCard({ exercise, logs, week, unit, program, persistLogs }) {
         </div>
         <div className="px-4 py-3 border-t border-zinc-800 flex items-center justify-between gap-3" style={{ backgroundColor: "rgba(9,9,11,0.3)" }}>
           <span className="font-mono text-zinc-500" style={tiny}>
-            {sug.lastSets ? `Carrying Week ${sug.lastWeek} forward · ${sug.weight}${unit} × ${sug.reps}` : "Skipped — nothing logged yet"}
+            {sug.lastSets ? `Carrying Week ${sug.lastWeek} forward · ${isBW ? bwLabel(sug.weight) : sug.weight + unit} × ${sug.reps}` : "Skipped — nothing logged yet"}
           </span>
           <button onClick={logInstead} className="rounded-lg border border-zinc-700 px-3 py-1 text-zinc-300 hover:bg-zinc-800" style={{ fontSize: 13 }}>Log instead</button>
         </div>
@@ -607,14 +623,14 @@ function ExerciseCard({ exercise, logs, week, unit, program, persistLogs }) {
             {sug.lastSets.map((s, i) => {
               const cl = (s.reps || 0) - (s.assist || 0);
               return (
-                <span key={i}>{s.weight}×
+                <span key={i}>{isBW ? bwLabel(s.weight) : s.weight}×
                   <span style={{ color: s.assist ? REP_ORANGE : undefined }}>{s.assist ? cl : s.reps}</span>
                   {s.assist ? <><span className="text-zinc-600">/</span><span style={{ color: REP_RED }}>{s.assist}</span></> : null}
                 </span>
               );
             })}
             <span className="text-zinc-700">→</span>
-            <span className="text-zinc-200">{sug.action === "deload" ? "deload " : sug.action === "clean" || sug.action === "stall" ? "hold " : "target "}{sug.weight}{unit} × {sug.reps} · {sug.setCount} sets</span>
+            <span className="text-zinc-200">{sug.action === "deload" ? "deload " : sug.action === "clean" || sug.action === "stall" ? "hold " : "target "}{isBW ? bwLabel(sug.weight) : sug.weight + unit} × {sug.reps} · {sug.setCount} sets</span>
             {carried && <span className="text-zinc-600">· carried fwd</span>}
           </div>
         ) : <span>No history yet — log this week to start the progression.</span>}
@@ -626,12 +642,12 @@ function ExerciseCard({ exercise, logs, week, unit, program, persistLogs }) {
 
       <div className="px-4 py-3 space-y-2">
         <div className="grid items-center gap-2 text-zinc-600 px-1" style={{ ...tinier, gridTemplateColumns: COLS }}>
-          <span className="uppercase">#</span><span className="uppercase">Weight ({unit})</span><span className="uppercase">Reps · clean/assist</span><span></span>
+          <span className="uppercase">#</span><span className="uppercase">{isBW ? "Added wt" : "Weight (" + unit + ")"}</span><span className="uppercase">Reps · clean/assist</span><span></span>
         </div>
         {rows.map((r, i) => (
           <div key={i} className="grid items-center gap-2" style={{ gridTemplateColumns: COLS }}>
             <span className="font-mono text-zinc-500 text-center" style={{ fontSize: 14 }}>{i + 1}</span>
-            <input type="number" inputMode="decimal" value={r.weight} onChange={(e) => update(i, "weight", e.target.value)} placeholder={sug.weight ? String(sug.weight) : ""}
+            <input type="number" inputMode="decimal" value={r.weight} onChange={(e) => update(i, "weight", e.target.value)} placeholder={isBW ? String(sug.weight) : (sug.weight ? String(sug.weight) : "")}
               className="bg-zinc-950 rounded-lg px-2 py-2 font-mono text-zinc-100 focus:outline-none" style={{ fontSize: 14, minWidth: 0, border: "1px solid " + (weightHit(r.weight) ? "rgba(52,211,153,0.55)" : "#27272a") }} />
             <RepInput value={r.repStr} goal={goalForRow(r.weight)} onChange={(v) => update(i, "repStr", v)} />
             <button onClick={() => removeSet(i)} className="text-zinc-600 hover:text-rose-400 flex justify-center"><X size={15} /></button>
@@ -645,6 +661,13 @@ function ExerciseCard({ exercise, logs, week, unit, program, persistLogs }) {
           Type clean reps; add <span className="font-mono text-zinc-400">/2</span> if you needed help, e.g. <span className="font-mono text-zinc-400">8/2</span>.
           {"  "}<span style={{ color: REP_GREEN }}>green</span> = goal hit clean · <span style={{ color: REP_ORANGE }}>orange</span> = short · <span style={{ color: REP_RED }}>red</span> = assisted. Only clean reps earn more weight.
         </p>
+        {isBW && (
+          <p className="text-zinc-500" style={{ fontSize: 10, lineHeight: 1.5 }}>
+            {bwSet
+              ? "Bodyweight exercise — enter added weight (0 = BW only, negative = assisted)."
+              : <span>Bodyweight exercise — <span className="text-amber-400">set your bodyweight in Routine → Units</span> for accurate e1RM.</span>}
+          </p>
+        )}
       </div>
 
       <div className="px-4 py-3 border-t border-zinc-800 flex items-center justify-between gap-3">
@@ -664,7 +687,7 @@ function ExerciseCard({ exercise, logs, week, unit, program, persistLogs }) {
 }
 
 /* ============================== PROGRESS ============================== */
-function ProgressView({ program, logs, unit }) {
+function ProgressView({ program, logs, unit, bodyweight }) {
   const allEx = program.days.flatMap((d) => d.exercises.map((e) => ({ ...e, day: d.name })));
   const withData = allEx.filter((e) => logs[e.id] && Object.keys(logs[e.id]).some((w) => (logs[e.id][w].sets || []).some((s) => s.reps > 0)));
   const [exId, setExId] = useState(withData[0]?.id || null);
@@ -673,13 +696,14 @@ function ProgressView({ program, logs, unit }) {
   if (!withData.length) return <Empty label="No logged data yet. Train a few weeks and your progress charts show up here." />;
   const ex = allEx.find((e) => e.id === exId) || withData[0];
   const exLogs = logs[ex.id] || {};
+  const bwOff = ex.equipment === "Bodyweight" && bodyweight != null ? bodyweight : 0;
   const data = Object.keys(exLogs).map(Number).filter((w) => (exLogs[w].sets || []).some((s) => s.reps > 0)).sort((a, b) => a - b).map((w) => {
     const sets = (exLogs[w].sets || []).filter((s) => s.reps > 0);
     return {
       week: "W" + w,
-      e1rm: sets.reduce((m, s) => Math.max(m, epley1RM(s.weight, cleanOf(s))), 0),
-      topW: sets.reduce((m, s) => Math.max(m, s.weight), 0),
-      vol: sets.reduce((a, s) => a + s.weight * s.reps, 0),
+      e1rm: sets.reduce((m, s) => Math.max(m, epley1RM(bwOff + s.weight, cleanOf(s))), 0),
+      topW: sets.reduce((m, s) => Math.max(m, bwOff + s.weight), 0),
+      vol: sets.reduce((a, s) => a + (bwOff + s.weight) * s.reps, 0),
       sets: sets.length, deload: !!exLogs[w].deload,
       assisted: sets.some((s) => (s.assist || 0) > 0),
     };
@@ -907,7 +931,7 @@ function SplitPicker({ onApply, onClose }) {
   );
 }
 
-function RoutineView({ program, logs, unit, setUnit, persistProgram, persistLogs }) {
+function RoutineView({ program, logs, unit, setUnit, persistProgram, persistLogs, bodyweight, persistBodyweight }) {
   const [editing, setEditing] = useState(null);
   const [picker, setPicker] = useState(null); // dayId for exercise picker
   const [splitOpen, setSplitOpen] = useState(false);
@@ -974,11 +998,18 @@ function RoutineView({ program, logs, unit, setUnit, persistProgram, persistLogs
         <p className="text-zinc-500 mt-3" style={{ fontSize: 11 }}>RIR drops one per week ({m.startRIR}→0), then the deload week backs off load and sets.</p>
       </div>
 
-      <div className="flex items-center justify-between">
-        <div className="flex items-center gap-2">
-          <Eyebrow>Units</Eyebrow>
-          <div className="flex rounded-lg border border-zinc-800 overflow-hidden">
-            {["lb", "kg"].map((u) => <button key={u} onClick={() => setUnit(u)} className={"px-3 py-1 " + (unit === u ? "bg-indigo-500 text-white" : "bg-zinc-900 text-zinc-400")} style={{ fontSize: 14 }}>{u}</button>)}
+      <div className="flex items-center justify-between flex-wrap gap-y-2">
+        <div className="flex items-center gap-4 flex-wrap">
+          <div className="flex items-center gap-2">
+            <Eyebrow>Units</Eyebrow>
+            <div className="flex rounded-lg border border-zinc-800 overflow-hidden">
+              {["lb", "kg"].map((u) => <button key={u} onClick={() => setUnit(u)} className={"px-3 py-1 " + (unit === u ? "bg-indigo-500 text-white" : "bg-zinc-900 text-zinc-400")} style={{ fontSize: 14 }}>{u}</button>)}
+            </div>
+          </div>
+          <div className="flex items-center gap-2">
+            <Eyebrow>Bodyweight</Eyebrow>
+            <input type="number" inputMode="decimal" value={bodyweight ?? ""} onChange={(e) => persistBodyweight(e.target.value === "" ? null : Number(e.target.value))} placeholder="—" className="bg-zinc-950 border border-zinc-800 rounded-lg px-2 py-1 font-mono text-zinc-100 focus:border-indigo-500 focus:outline-none" style={{ fontSize: 13, width: 64 }} />
+            <span className="text-zinc-500" style={tiny}>{unit}</span>
           </div>
         </div>
         <button onClick={exportData} className="flex items-center gap-1 text-zinc-400 hover:text-zinc-100" style={{ fontSize: 14 }}><Download size={15} /> Export</button>
