@@ -15,11 +15,18 @@ All UI and logic live in `src/App.jsx` (default export `App`).
 
 ## Data model
 - **program**: `{ name, meso, days: [ { id, name, weekday, exercises: [ { id, name, muscle,
-  style, sets, repLow, repHigh, inc } ] } ] }`
+  style, equipment, sets, repLow, repHigh, inc } ] } ] }`
+  - `equipment`: one of `"Barbell" | "Dumbbell" | "Machine" | "Cable" | "Bodyweight" | "Other"`.
+    Backfilled on load by `normalizeProgram` from `LIB_BY_NAME` lookup then "Other" if missing.
+    Spread-first pattern: `{ ...e, style, equipment }` — never let undefined in existing data win.
 - **meso**: `{ length, deload, startRIR, addSet, maxSets }`
 - **logs**: `{ [exerciseId]: { [weekNumber]: { sets:[{weight,reps,assist}], rir, deload, ts }
   | { skipped:true, ts } } }`
-- Reps are stored as total `reps` plus `assist` (assisted/forced reps). Clean reps = reps - assist.
+  - For bodyweight exercises `weight` stores the *added* weight (0 = BW only, negative = assisted).
+    Total load is computed on-the-fly as `bodyweight + added`.
+  - Reps are stored as total `reps` plus `assist` (assisted/forced reps). Clean reps = reps - assist.
+- **settings**: `{ week, unit, bodyweight }` — `bodyweight` is a number (lbs or kg matching `unit`)
+  or `null`. Backwards-compatible: loads as `null` if absent.
 
 ## Progression engine (function `suggest`)
 Double progression, range-agnostic:
@@ -31,19 +38,67 @@ Double progression, range-agnostic:
 - Skipped weeks are ignored by progression (it references the last real working week).
 Helpers: `epley1RM`, `predictReps` (load↔rep autocorrect), `workingWeeksDesc`, `cleanOf`.
 
+## Per-set rep targets and fatigue (ExerciseCard)
+- `fatigueDropPerSet`: derived each render from `sug.lastSets`. Takes the clean-rep counts in
+  order across last week's sets and computes `(firstReps - lastReps) / (numSets - 1)`. Clamped
+  to ≥ 0. Falls back to 1 rep/set when fewer than 2 sets in history.
+- `goalForSet(setIdx, rowWeight)`: same load→rep logic as the old flat goal, then applies
+  `Math.max(1, Math.round(set1Target - setIdx * fatigueDropPerSet))`. Set 0 gets the full
+  predicted target; later sets step down by the fatigue offset.
+- **Placeholder vs coloring split**: `RepInput` receives two different `goal` values depending
+  on whether a rep has been entered. Empty field → `goalForSet(i, w)` (per-set hint in the
+  placeholder). Logged field → `goalForSet(0, w)` (flat base target, same for all sets, matches
+  the progression bar). This keeps coloring consistent with what earns a weight increase.
+
+## Weight cascade (ExerciseCard)
+- Fresh week: `build()` seeds only **row 0** with `sug.weight`; rows 1+ start as `""`.
+- `cascadeWeight(i)`: reads `prev[i].weight`; if non-empty, fills downstream `""` rows and
+  stops at the first non-empty row. Wired to `onBlur` on the weight input so it fires once on
+  the committed value, not mid-keystroke.
+- New sets added via "Add set" also start as `""` and inherit the weight above on blur.
+- Never overwrites a weight already typed.
+
+## Bodyweight exercises
+- `LIB` exercises include `equipment: "Bodyweight"` where appropriate.
+- `bwLabel(added)`: formats added weight as "BW", "BW+25", "BW−20 assisted".
+- `totalOf(added)` in ExerciseCard: `(isBW && bwSet) ? bodyweight + added : added`.
+- `workingWeight(sets)`: auto-detects BW via `hasNonPositive`; includes ≤ 0 weights in the
+  modal-weight calculation so BW-only (weight=0) is handled correctly.
+- `refE1RM` in ExerciseCard is inlined (not `bestE1RMHistory`) so the BW offset can be added
+  before `epley1RM`. `ProgressView` similarly applies a `bwOff` before charting e1RM/volume.
+- Bodyweight is stored in `wt_settings` and set via a number input in Routine → Units.
+
 ## Splits & exercises
-- `LIB`: 67-exercise library `[name, muscle, style]` -> objects. `LIB_BY_NAME` indexes it.
+- `LIB`: 67-exercise library `[name, muscle, style, equipment]` -> objects. `LIB_BY_NAME` indexes it.
+- `EQUIPMENT = ["Barbell", "Dumbbell", "Machine", "Cable", "Bodyweight"]`; `equipColor(eq)` maps
+  each to a hex color for badges.
 - `SPLITS`: presets built via `d(name, weekday, [exerciseNames])`; names MUST exist in LIB.
   `buildSplit()` turns a preset into program days. `exFromLib` is guarded against missing names.
+- `ExercisePicker`: filter chips by equipment category, equipment + style badges per exercise,
+  inline custom-exercise form with name/muscle/equipment selection.
 - UI: `SplitPicker` (choose a template) and `ExercisePicker` (search/add from library) render
   inside `Modal`. RoutineView also supports day reorder (`moveDay`) and weekday assignment.
+
+## Known issues
+- **Cascade doesn't auto-flow on initial page load.** Row 0 is seeded by `build()` at init but no
+  blur fires, so rows 2+ stay empty until the user clicks into and out of row 0. `ExerciseCard.build`
+  / `cascadeWeight`.
+- **`logInstead` pre-fills all rows directly**, bypassing the blur-cascade model. Inconsistent but
+  harmless — all rows end up filled. `ExerciseCard.logInstead`.
+- **Adding a set mid-session doesn't auto-inherit weight.** The new `""` row only fills when the
+  user re-blurs a row above it. `ExerciseCard.addSet` / `cascadeWeight`.
+- **Fatigue drop can mislead with drop sets.** `fatigueDropPerSet` uses `cleanOf` across all of
+  last week's sets in order; if sets were at different weights the drop figure is skewed.
+  `ExerciseCard.fatigueDropPerSet`.
 
 ## Good next tasks / ideas
 - Cross-device sync (replace storage-shim with a backend; keep the same window.storage API).
 - PWA manifest + service worker for true offline/home-screen install.
 - Per-set RIR (currently one RIR per exercise per session).
-- Rest timer; bodyweight/assisted-loading exercises; 1RM test mode.
+- Rest timer; 1RM test mode.
 - Import the JSON produced by the in-app Export button.
+- Auto-cascade on mount: call `cascadeWeight(0)` inside `useEffect([week, exercise.id])` after
+  `setRows(build())` so rows 1+ fill immediately on page load without requiring a blur.
 
 ## iOS / App Store
 - This is a PWA (manifest + `public/sw.js` + apple-touch-icon/meta in index.html). Add to Home Screen on iOS gives a full-screen app, free.
