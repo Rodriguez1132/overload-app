@@ -1,0 +1,6 @@
+{
+  "appId": "com.overload.app",
+  "appName": "Overload",
+  "webDir": "dist",
+  "ios": { "contentInset": "always" }
+}
