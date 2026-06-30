@@ -534,7 +534,7 @@ function ExerciseCard({ exercise, logs, week, unit, program, persistLogs, bodywe
   const build = () => {
     if (existing?.sets?.length)
       return existing.sets.map((s) => ({ weight: isBW ? String(s.weight ?? 0) : String(s.weight || ""), repStr: s.assist ? `${(s.reps || 0) - s.assist}/${s.assist}` : (s.reps ? String(s.reps) : "") }));
-    return Array.from({ length: sug.setCount }, () => ({ weight: isBW ? String(sug.weight) : (sug.weight ? String(sug.weight) : ""), repStr: "" }));
+    return Array.from({ length: sug.setCount }, (_, idx) => ({ weight: idx === 0 ? (isBW ? String(sug.weight) : (sug.weight ? String(sug.weight) : "")) : "", repStr: "" }));
   };
   const [rows, setRows] = useState(build);
   const [rir, setRir] = useState(existing?.rir != null ? String(existing.rir) : "");
@@ -546,17 +546,20 @@ function ExerciseCard({ exercise, logs, week, unit, program, persistLogs, bodywe
   useEffect(() => { setRows(build()); setRir(existing?.rir != null ? String(existing.rir) : ""); setDirty(false); /* eslint-disable-next-line */ }, [week, exercise.id]);
 
   const update = (i, f, v) => {
+    setRows(prev => prev.map((r, idx) => idx === i ? { ...r, [f]: v } : r));
+    setDirty(true);
+  };
+  const cascadeWeight = (i) => {
     setRows(prev => {
-      const next = prev.map((r, idx) => idx === i ? { ...r, [f]: v } : r);
-      if (f === "weight") {
-        for (let j = i + 1; j < next.length; j++) {
-          if (next[j].weight === "") next[j] = { ...next[j], weight: v };
-          else break;
-        }
+      const val = prev[i].weight;
+      if (val === "") return prev;
+      const next = [...prev];
+      for (let j = i + 1; j < next.length; j++) {
+        if (next[j].weight === "") next[j] = { ...next[j], weight: val };
+        else break;
       }
       return next;
     });
-    setDirty(true);
   };
   const addSet = () => { setRows(prev => [...prev, { weight: "", repStr: "" }]); setDirty(true); };
   const removeSet = (i) => { setRows(rows.filter((_, idx) => idx !== i)); setDirty(true); };
@@ -665,9 +668,9 @@ function ExerciseCard({ exercise, logs, week, unit, program, persistLogs, bodywe
         {rows.map((r, i) => (
           <div key={i} className="grid items-center gap-2" style={{ gridTemplateColumns: COLS }}>
             <span className="font-mono text-zinc-500 text-center" style={{ fontSize: 14 }}>{i + 1}</span>
-            <input type="number" inputMode="decimal" value={r.weight} onChange={(e) => update(i, "weight", e.target.value)} placeholder={isBW ? String(sug.weight) : (sug.weight ? String(sug.weight) : "")}
+            <input type="number" inputMode="decimal" value={r.weight} onChange={(e) => update(i, "weight", e.target.value)} onBlur={() => cascadeWeight(i)} placeholder={isBW ? String(sug.weight) : (sug.weight ? String(sug.weight) : "")}
               className="bg-zinc-950 rounded-lg px-2 py-2 font-mono text-zinc-100 focus:outline-none" style={{ fontSize: 14, minWidth: 0, border: "1px solid " + (weightHit(r.weight) ? "rgba(52,211,153,0.55)" : "#27272a") }} />
-            <RepInput value={r.repStr} goal={goalForSet(i, r.weight)} onChange={(v) => update(i, "repStr", v)} />
+            <RepInput value={r.repStr} goal={r.repStr !== "" ? goalForSet(0, r.weight) : goalForSet(i, r.weight)} onChange={(v) => update(i, "repStr", v)} />
             <button onClick={() => removeSet(i)} className="text-zinc-600 hover:text-rose-400 flex justify-center"><X size={15} /></button>
           </div>
         ))}
