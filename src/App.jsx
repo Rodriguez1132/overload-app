@@ -177,7 +177,11 @@ function normalizeProgram(p) {
   if (!p.meso) p.meso = { length: 5, deload: true, startRIR: 3, addSet: false, maxSets: 6 };
   p.days = (p.days || []).map((d) => ({
     weekday: d.weekday ?? null, ...d,
-    exercises: (d.exercises || []).map((e) => ({ style: e.style || styleFromRange(e.repLow, e.repHigh), ...e })),
+    exercises: (d.exercises || []).map((e) => {
+      const style = e.style || styleFromRange(e.repLow, e.repHigh);
+      const equipment = e.equipment || LIB_BY_NAME[e.name]?.equipment || "Other";
+      return { ...e, style, equipment };
+    }),
   }));
   return p;
 }
