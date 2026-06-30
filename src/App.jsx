@@ -545,8 +545,20 @@ function ExerciseCard({ exercise, logs, week, unit, program, persistLogs, bodywe
 
   useEffect(() => { setRows(build()); setRir(existing?.rir != null ? String(existing.rir) : ""); setDirty(false); /* eslint-disable-next-line */ }, [week, exercise.id]);
 
-  const update = (i, f, v) => { setRows(rows.map((r, idx) => idx === i ? { ...r, [f]: v } : r)); setDirty(true); };
-  const addSet = () => { setRows([...rows, { weight: sug.weight ? String(sug.weight) : "", repStr: "" }]); setDirty(true); };
+  const update = (i, f, v) => {
+    setRows(prev => {
+      const next = prev.map((r, idx) => idx === i ? { ...r, [f]: v } : r);
+      if (f === "weight") {
+        for (let j = i + 1; j < next.length; j++) {
+          if (next[j].weight === "") next[j] = { ...next[j], weight: v };
+          else break;
+        }
+      }
+      return next;
+    });
+    setDirty(true);
+  };
+  const addSet = () => { setRows(prev => [...prev, { weight: "", repStr: "" }]); setDirty(true); };
   const removeSet = (i) => { setRows(rows.filter((_, idx) => idx !== i)); setDirty(true); };
 
   const skipExercise = () => {
@@ -572,12 +584,18 @@ function ExerciseCard({ exercise, logs, week, unit, program, persistLogs, bodywe
   };
 
   const bestNow = rows.reduce((m, r) => Math.max(m, epley1RM(totalOf(Number(r.weight)), parseRep(r.repStr).clean)), 0);
-  const goalForRow = (rowWeight) => {
+  const fatigueDropPerSet = useMemo(() => {
+    if (!sug.lastSets || sug.lastSets.length < 2) return 1;
+    const reps = sug.lastSets.map(s => cleanOf(s));
+    return Math.max(0, (reps[0] - reps[reps.length - 1]) / (reps.length - 1));
+  }, [sug]);
+  const goalForSet = (setIdx, rowWeight) => {
     const addedW = rowWeight !== "" && rowWeight !== undefined ? Number(rowWeight) : sug.weight;
     const w = totalOf(isNaN(addedW) ? sug.weight : addedW);
     const p = predictReps(refE1RM, w);
-    const raw = p != null ? p : (sug.action === "weight" || sug.action === "deload" ? exercise.repLow : (sug.reps || exercise.repLow));
-    return Math.min(exercise.repHigh, Math.max(exercise.repLow, raw));
+    const base = p != null ? p : (sug.action === "weight" || sug.action === "deload" ? exercise.repLow : (sug.reps || exercise.repLow));
+    const set1Target = Math.min(exercise.repHigh, Math.max(exercise.repLow, base));
+    return Math.max(1, Math.round(set1Target - setIdx * fatigueDropPerSet));
   };
   const weightHit = (rowWeight) => !meso.isDeload && sug.weight > 0 && Number(rowWeight) >= sug.weight;
 
@@ -649,7 +667,7 @@ function ExerciseCard({ exercise, logs, week, unit, program, persistLogs, bodywe
             <span className="font-mono text-zinc-500 text-center" style={{ fontSize: 14 }}>{i + 1}</span>
             <input type="number" inputMode="decimal" value={r.weight} onChange={(e) => update(i, "weight", e.target.value)} placeholder={isBW ? String(sug.weight) : (sug.weight ? String(sug.weight) : "")}
               className="bg-zinc-950 rounded-lg px-2 py-2 font-mono text-zinc-100 focus:outline-none" style={{ fontSize: 14, minWidth: 0, border: "1px solid " + (weightHit(r.weight) ? "rgba(52,211,153,0.55)" : "#27272a") }} />
-            <RepInput value={r.repStr} goal={goalForRow(r.weight)} onChange={(v) => update(i, "repStr", v)} />
+            <RepInput value={r.repStr} goal={goalForSet(i, r.weight)} onChange={(v) => update(i, "repStr", v)} />
             <button onClick={() => removeSet(i)} className="text-zinc-600 hover:text-rose-400 flex justify-center"><X size={15} /></button>
           </div>
         ))}
