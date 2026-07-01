@@ -11,7 +11,7 @@ All UI and logic live in `src/App.jsx` (default export `App`).
   custom grid templates the code uses **inline `style={{...}}`** on purpose — keep that pattern.
 - Persistence goes through `window.storage` (async get/set/delete/list). In production that
   comes from `src/storage-shim.js` (localStorage). Do NOT call localStorage directly in App.jsx.
-- Keys used: `wt_program`, `wt_logs`, `wt_settings`.
+- Keys used: `wt_program`, `wt_logs`, `wt_settings`, `wt_feedback`.
 
 ## Data model
 - **program**: `{ name, meso, days: [ { id, name, weekday, exercises: [ { id, name, muscle,
@@ -29,14 +29,20 @@ All UI and logic live in `src/App.jsx` (default export `App`).
   or `null`. Backwards-compatible: loads as `null` if absent.
 - **feedback** (`wt_feedback`): `{ [week]: { [muscle]: { soreness?, pump?, joints?, workload? } } }`.
   All values are integers; absent key = unanswered (never store `undefined`).
-  - `soreness`: 0=not sore, 1=healed early, 2=just right, 3=still sore. Captured at session start,
-    per muscle with prior history. Asks about recovery *since the last session*, skippable.
+  - `soreness`: 0=not sore, 1=healed early, 2=just right, 3=still sore.
   - `pump`: 0=low, 1=good, 2=incredible.
-  - `joints`: 0=none, 1=mild, 2=moderate, 3=significant. Only displayed when > 0.
+  - `joints`: 0=none, 1=mild, 2=moderate, 3=significant.
   - `workload`: 0=too light, 1=perfect, 2=very hard, 3=overdone.
-  - pump/joints/workload captured via "Finish session" modal, once per muscle (muscle = last exercise
-    position ordering). Stage 2 (autoregulation — using these values to adjust set counts / volume
-    recommendations) is pending and NOT yet implemented.
+  **Stage 1 (capture + display) — DONE.** Components:
+  - `RecoveryCheck`: soreness per muscle at session start. Gated to muscles with at least
+    one prior logged week (nothing to be sore from otherwise). Dismissible via ×; resets
+    on day switch via `key={day.id}`. Skippable; never blocks logging.
+  - `FinishModal` (via "Finish session" button): pump / joint feel / workload per muscle,
+    at session end. Button appears once any set on the day is logged. Muscles ordered by
+    last-exercise position in the day. Saves immediately on tap. Optional; skippable.
+  - Volume tab "Session feedback" card: reads `wt_feedback[week]` and shows colored pills
+    next to each muscle's set count when data exists. Joints=0 (no pain) is suppressed.
+  See "Stage 2" section below for what's next.
 
 ## Progression engine (function `suggest`)
 Double progression, range-agnostic:
@@ -101,7 +107,29 @@ Helpers: `epley1RM`, `predictReps` (load↔rep autocorrect), `workingWeeksDesc`,
   last week's sets in order; if sets were at different weights the drop figure is skewed.
   `ExerciseCard.fatigueDropPerSet`.
 
+## Stage 2 — Autoregulation (pending)
+Read `wt_feedback` at the start of each new week and adjust the suggested set count per
+muscle in `suggest()` before the week's sessions begin.
+
+**Signal → action mapping (draft):**
+- `soreness=3` (still sore): reduce sets for that muscle by 1 next session.
+- `workload=0` (too light) or `pump=0` (low) sustained two weeks: add 1 set.
+- `workload=3` (overdone) or `joints≥2` (moderate+ pain): reduce sets; surface joint
+  pain visibly on the relevant ExerciseCard, not just in Volume.
+- `soreness=1` (healed early) + `workload=0`: strong combined signal to add load or sets.
+
+**Open design questions before implementing:**
+1. When a muscle earns an extra set, which exercise gets it? Options: last exercise in
+   the day (isolation/finisher, least systemic fatigue), first (compound, most impact),
+   or a per-exercise override the user can assign in Routine.
+2. All four signals need null-handling: `wt_feedback[w]?.[muscle]?.[field]` may be
+   absent for any combination of week, muscle, or field. Must degrade gracefully to the
+   static set-count baseline when feedback is missing.
+3. One week vs two consecutive weeks before acting: single-week response is noisier
+   (one bad session) but faster; two-week confirmation is more reliable.
+
 ## Good next tasks / ideas
+- **Stage 2 autoregulation** — see section above. This is the explicit next task.
 - Cross-device sync (replace storage-shim with a backend; keep the same window.storage API).
 - PWA manifest + service worker for true offline/home-screen install.
 - Per-set RIR (currently one RIR per exercise per session).
