@@ -300,6 +300,16 @@ const muscleColor = (m) => ({
 const tiny = { fontSize: 11 };
 const tinier = { fontSize: 10, letterSpacing: "0.08em" };
 
+/* ============================== feedback options ============================== */
+const SORENESS_OPTS = [
+  { v: 0, label: "Not sore" }, { v: 1, label: "Healed early" },
+  { v: 2, label: "Just right" }, { v: 3, label: "Still sore" },
+];
+const PUMP_OPTS     = [{ v: 0, label: "Low" }, { v: 1, label: "Good" }, { v: 2, label: "Incredible" }];
+const JOINTS_OPTS   = [{ v: 0, label: "None" }, { v: 1, label: "Mild" }, { v: 2, label: "Moderate" }, { v: 3, label: "Significant" }];
+const WORKLOAD_OPTS = [{ v: 0, label: "Too light" }, { v: 1, label: "Perfect" }, { v: 2, label: "Very hard" }, { v: 3, label: "Overdone" }];
+const fbLabel = (opts, v) => v == null ? null : (opts.find((o) => o.v === v)?.label ?? null);
+
 function Eyebrow({ children }) { return <div className="uppercase text-zinc-500 font-medium" style={tinier}>{children}</div>; }
 
 function Badge({ action }) {
@@ -332,14 +342,16 @@ export default function App() {
   const [bodyweight, setBodyweight] = useState(null);
   const [tab, setTab] = useState("train");
   const [dayId, setDayId] = useState(null);
+  const [feedback, setFeedback] = useState({});
 
   useEffect(() => {
     (async () => {
       const p = normalizeProgram(await loadKey("wt_program", null));
       const l = await loadKey("wt_logs", {});
       const s = await loadKey("wt_settings", { week: 1, unit: "lb" });
+      const fb = await loadKey("wt_feedback", {});
       await saveKey("wt_program", p);
-      setProgram(p); setLogs(l); setWeek(s.week || 1); setUnit(s.unit || "lb"); setBodyweight(s.bodyweight ?? null);
+      setProgram(p); setLogs(l); setWeek(s.week || 1); setUnit(s.unit || "lb"); setBodyweight(s.bodyweight ?? null); setFeedback(fb);
       const today = p.days.find((d) => d.weekday === todayLabel());
       setDayId((today || p.days[0])?.id || null);
       setLoading(false);
@@ -351,6 +363,7 @@ export default function App() {
   const persistSettings = (w, u, bw) => saveKey("wt_settings", { week: w, unit: u, bodyweight: bw ?? null });
   const changeWeek = (d) => { const w = Math.max(1, week + d); setWeek(w); persistSettings(w, unit, bodyweight); };
   const persistBodyweight = (bw) => { setBodyweight(bw); persistSettings(week, unit, bw); };
+  const persistFeedback = (n) => { setFeedback(n); saveKey("wt_feedback", n); };
 
   if (loading || !program)
     return <div className="min-h-screen bg-zinc-950 flex items-center justify-center text-zinc-500 font-mono" style={{ fontSize: 14 }}>Loading your log…</div>;
@@ -392,9 +405,9 @@ export default function App() {
       </header>
 
       <main className="max-w-3xl mx-auto px-4 py-5" style={{ paddingBottom: 96 }}>
-        {tab === "train" && <TrainView program={program} logs={logs} week={week} unit={unit} meso={meso} dayId={dayId} setDayId={setDayId} persistLogs={persistLogs} bodyweight={bodyweight} />}
+        {tab === "train" && <TrainView program={program} logs={logs} week={week} unit={unit} meso={meso} dayId={dayId} setDayId={setDayId} persistLogs={persistLogs} bodyweight={bodyweight} feedback={feedback} persistFeedback={persistFeedback} />}
         {tab === "progress" && <ProgressView program={program} logs={logs} unit={unit} bodyweight={bodyweight} />}
-        {tab === "volume" && <VolumeView program={program} logs={logs} week={week} meso={meso} />}
+        {tab === "volume" && <VolumeView program={program} logs={logs} week={week} meso={meso} feedback={feedback} />}
         {tab === "routine" && <RoutineView program={program} logs={logs} unit={unit} setUnit={(u) => { setUnit(u); persistSettings(week, u, bodyweight); }} persistProgram={persistProgram} persistLogs={persistLogs} bodyweight={bodyweight} persistBodyweight={persistBodyweight} />}
       </main>
     </div>
@@ -402,11 +415,30 @@ export default function App() {
 }
 
 /* ============================== TRAIN ============================== */
-function TrainView({ program, logs, week, unit, meso, dayId, setDayId, persistLogs, bodyweight }) {
+function TrainView({ program, logs, week, unit, meso, dayId, setDayId, persistLogs, bodyweight, feedback, persistFeedback }) {
   const today = todayLabel();
   const day = program.days.find((d) => d.id === dayId) || program.days[0];
   if (!day) return <Empty label="No workout days yet. Add one in the Routine tab." />;
   const unscheduled = program.days.filter((d) => !d.weekday);
+  const [finishOpen, setFinishOpen] = useState(false);
+  useEffect(() => { setFinishOpen(false); }, [dayId]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const musclesOrdered = (() => {
+    const lastIdx = {};
+    day.exercises.forEach((ex, i) => { lastIdx[ex.muscle] = i; });
+    return Object.entries(lastIdx).sort((a, b) => a[1] - b[1]).map(([m]) => m);
+  })();
+  const musclesWithHistory = musclesOrdered.filter((muscle) =>
+    day.exercises.filter((ex) => ex.muscle === muscle).some((ex) =>
+      Object.keys(logs[ex.id] || {}).some((w) => Number(w) < week && (logs[ex.id][w]?.sets || []).some((s) => s.reps > 0))
+    )
+  );
+  const anyLogged = day.exercises.some((ex) => (logs[ex.id]?.[week]?.sets || []).some((s) => s.reps > 0));
+  const weekFb = feedback[week] || {};
+  const saveSoreness = (muscle, value) =>
+    persistFeedback({ ...feedback, [week]: { ...weekFb, [muscle]: { ...(weekFb[muscle] || {}), soreness: value } } });
+  const saveFinishField = (muscle, field, value) =>
+    persistFeedback({ ...feedback, [week]: { ...weekFb, [muscle]: { ...(weekFb[muscle] || {}), [field]: value } } });
 
   const allSkipped = day.exercises.length > 0 && day.exercises.every((ex) => logs[ex.id]?.[week]?.skipped);
   const skipDay = (skip) => {
@@ -456,10 +488,21 @@ function TrainView({ program, logs, week, unit, meso, dayId, setDayId, persistLo
         </div>
       </div>
 
+      {musclesWithHistory.length > 0 && <RecoveryCheck key={day.id} muscles={musclesWithHistory} weekFeedback={weekFb} onSave={saveSoreness} />}
+
       <div className="space-y-3">
         {day.exercises.map((ex) => <ExerciseCard key={ex.id} exercise={ex} logs={logs} week={week} unit={unit} program={program} persistLogs={persistLogs} bodyweight={bodyweight} />)}
         {day.exercises.length === 0 && <Empty label="No exercises on this day yet. Add some in Routine." />}
       </div>
+
+      {anyLogged && (
+        <div className="mt-4">
+          <button onClick={() => setFinishOpen(true)} className="w-full rounded-xl border border-zinc-700 py-3 text-zinc-300 hover:border-indigo-500 hover:text-indigo-400 font-medium" style={{ fontSize: 14 }}>
+            Finish session
+          </button>
+        </div>
+      )}
+      {finishOpen && <FinishModal muscles={musclesOrdered} weekFeedback={weekFb} onSave={saveFinishField} onClose={() => setFinishOpen(false)} />}
     </div>
   );
 }
@@ -779,8 +822,89 @@ function ProgressView({ program, logs, unit, bodyweight }) {
   );
 }
 
+/* ============================== FEEDBACK COMPONENTS ============================== */
+function RecoveryCheck({ muscles, weekFeedback, onSave }) {
+  const [dismissed, setDismissed] = useState(false);
+  if (dismissed) return null;
+  return (
+    <div className="rounded-xl border border-zinc-800 p-4 mb-3" style={{ backgroundColor: "rgba(24,24,27,0.6)" }}>
+      <div className="flex items-start justify-between mb-3">
+        <div>
+          <div className="font-medium text-zinc-200" style={{ fontSize: 14 }}>Recovery check</div>
+          <div className="text-zinc-500" style={{ fontSize: 11 }}>How sore has each muscle been since your last session?</div>
+        </div>
+        <button onClick={() => setDismissed(true)} className="text-zinc-600 hover:text-zinc-300 ml-2 shrink-0"><X size={15} /></button>
+      </div>
+      <div className="space-y-3">
+        {muscles.map((muscle) => {
+          const current = weekFeedback?.[muscle]?.soreness;
+          return (
+            <div key={muscle}>
+              <div className="mb-1 font-medium" style={{ fontSize: 12, color: muscleColor(muscle) }}>{muscle}</div>
+              <div className="flex flex-wrap gap-1">
+                {SORENESS_OPTS.map(({ v, label }) => (
+                  <button key={v} onClick={() => onSave(muscle, v)}
+                    className={"px-2 py-1 rounded-md border font-medium " + (current === v ? "border-indigo-500 bg-indigo-500 text-white" : "border-zinc-700 bg-zinc-900 text-zinc-400 hover:border-zinc-600")}
+                    style={{ fontSize: 11 }}>{label}</button>
+                ))}
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+function FinishModal({ muscles, weekFeedback, onSave, onClose }) {
+  return (
+    <Modal title="Finish session" subtitle="Optional — how did each muscle feel today?" onClose={onClose}>
+      <div className="space-y-5">
+        {muscles.map((muscle) => {
+          const fb = weekFeedback?.[muscle] || {};
+          const BtnRow = ({ opts, field }) => (
+            <div className="flex flex-wrap gap-1">
+              {opts.map(({ v, label }) => (
+                <button key={v} onClick={() => onSave(muscle, field, v)}
+                  className={"px-2 py-1 rounded-md border font-medium " + (fb[field] === v ? "border-indigo-500 bg-indigo-500 text-white" : "border-zinc-700 bg-zinc-900 text-zinc-400 hover:border-zinc-600")}
+                  style={{ fontSize: 11 }}>{label}</button>
+              ))}
+            </div>
+          );
+          return (
+            <div key={muscle}>
+              <div className="font-semibold mb-2" style={{ fontSize: 14, color: muscleColor(muscle) }}>{muscle}</div>
+              <div className="space-y-2">
+                <div>
+                  <div className="text-zinc-500 mb-1" style={{ fontSize: 11 }}>Pump</div>
+                  <BtnRow opts={PUMP_OPTS} field="pump" />
+                </div>
+                <div>
+                  <div className="text-zinc-500 mb-1" style={{ fontSize: 11 }}>Joint feel</div>
+                  <BtnRow opts={JOINTS_OPTS} field="joints" />
+                </div>
+                <div>
+                  <div className="text-zinc-500 mb-1" style={{ fontSize: 11 }}>Workload</div>
+                  <BtnRow opts={WORKLOAD_OPTS} field="workload" />
+                </div>
+              </div>
+            </div>
+          );
+        })}
+        <button onClick={onClose} className="w-full rounded-lg bg-indigo-600 hover:bg-indigo-500 py-2 text-white font-medium" style={{ fontSize: 14 }}>Done</button>
+      </div>
+    </Modal>
+  );
+}
+
+function FbPill({ label, color }) {
+  return (
+    <span className="px-2 py-0 rounded font-medium" style={{ fontSize: 10, backgroundColor: color + "1a", color }}>{label}</span>
+  );
+}
+
 /* ============================== VOLUME ============================== */
-function VolumeView({ program, logs, week, meso }) {
+function VolumeView({ program, logs, week, meso, feedback }) {
   const counts = {};
   program.days.forEach((d) => d.exercises.forEach((ex) => {
     const sets = logs[ex.id]?.[week]?.sets?.filter((s) => s.reps > 0) || [];
@@ -812,6 +936,27 @@ function VolumeView({ program, logs, week, meso }) {
             respond well to about 10–20 hard sets per week, though the right number is individual and worth dialing
             in across a mesocycle. Informational, not a prescription.
           </p>
+          {data.some(({ muscle }) => feedback?.[week]?.[muscle]) && (
+            <div className="rounded-xl border border-zinc-800 p-4 mt-4" style={{ backgroundColor: "rgba(24,24,27,0.6)" }}>
+              <Eyebrow>Session feedback</Eyebrow>
+              <div className="mt-3 space-y-2">
+                {data.map(({ muscle, sets }) => {
+                  const fb = feedback?.[week]?.[muscle];
+                  if (!fb) return null;
+                  return (
+                    <div key={muscle} className="flex items-center gap-2 flex-wrap">
+                      <span style={{ color: muscleColor(muscle), fontSize: 13, minWidth: 88 }}>{muscle}</span>
+                      <span className="font-mono text-zinc-600" style={{ fontSize: 11, minWidth: 36 }}>{sets}×</span>
+                      {fb.soreness != null && <FbPill label={fbLabel(SORENESS_OPTS, fb.soreness)} color="#fbbf24" />}
+                      {fb.pump != null && <FbPill label={"Pump: " + fbLabel(PUMP_OPTS, fb.pump)} color="#34d399" />}
+                      {fb.joints != null && fb.joints > 0 && <FbPill label={"Joints: " + fbLabel(JOINTS_OPTS, fb.joints)} color="#fb7185" />}
+                      {fb.workload != null && <FbPill label={fbLabel(WORKLOAD_OPTS, fb.workload)} color="#818cf8" />}
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
         </>
       )}
     </div>

@@ -27,6 +27,16 @@ All UI and logic live in `src/App.jsx` (default export `App`).
   - Reps are stored as total `reps` plus `assist` (assisted/forced reps). Clean reps = reps - assist.
 - **settings**: `{ week, unit, bodyweight }` — `bodyweight` is a number (lbs or kg matching `unit`)
   or `null`. Backwards-compatible: loads as `null` if absent.
+- **feedback** (`wt_feedback`): `{ [week]: { [muscle]: { soreness?, pump?, joints?, workload? } } }`.
+  All values are integers; absent key = unanswered (never store `undefined`).
+  - `soreness`: 0=not sore, 1=healed early, 2=just right, 3=still sore. Captured at session start,
+    per muscle with prior history. Asks about recovery *since the last session*, skippable.
+  - `pump`: 0=low, 1=good, 2=incredible.
+  - `joints`: 0=none, 1=mild, 2=moderate, 3=significant. Only displayed when > 0.
+  - `workload`: 0=too light, 1=perfect, 2=very hard, 3=overdone.
+  - pump/joints/workload captured via "Finish session" modal, once per muscle (muscle = last exercise
+    position ordering). Stage 2 (autoregulation — using these values to adjust set counts / volume
+    recommendations) is pending and NOT yet implemented.
 
 ## Progression engine (function `suggest`)
 Double progression, range-agnostic:
